@@ -1,45 +1,64 @@
-from fastapi import FastAPI, UploadFile, File
-from PIL import Image
+import logging
 import io
 
-from .model_loader import load_model_and_processor
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from PIL import Image
+
+from .model_loader import MODEL_NAME, load_model_and_processor
 from .prompt_template import PROMPT_TEMPLATE
 
+logger = logging.getLogger(__name__)
 app = FastAPI()
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "model": MODEL_NAME}
 
 
 @app.post("/generate-notes")
 async def generate_notes(file: UploadFile = File(...)):
-    model, processor = load_model_and_processor()
-
     image_bytes = await file.read()
-    image = Image.open(io.BytesIO(image_bytes))
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid image.") from exc
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": PROMPT_TEMPLATE},
-            ],
-        }
-    ]
+    try:
+        model, processor = load_model_and_processor()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    text = processor.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
+    try:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": PROMPT_TEMPLATE},
+                ],
+            }
+        ]
 
-    inputs = processor(
-        text=[text],
-        images=[image],
-        padding=True,
-        return_tensors="pt"
-    ).to(model.device)
+        text = processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
-    output = model.generate(**inputs, max_new_tokens=800)
+        inputs = processor(
+            text=[text],
+            images=[image],
+            padding=True,
+            return_tensors="pt",
+        ).to(model.device)
 
-    result = processor.decode(output[0], skip_special_tokens=True)
+        output = model.generate(**inputs, max_new_tokens=800)
+        result = processor.decode(output[0], skip_special_tokens=True)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to generate board notes")
+        raise HTTPException(status_code=500, detail="Failed to generate notes from the uploaded image.") from exc
 
     return {"notes": result}
