@@ -18,6 +18,7 @@ from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 # --------------------------------------------------------------------------- #
 
 MODEL_NAME = os.getenv("BOARD_NOTES_MODEL", "Qwen/Qwen2-VL-2B-Instruct")
+TEST_MAX_IMAGE_SIDE = int(os.getenv("TEST_MAX_IMAGE_SIDE", "1024"))
 
 PROMPT = """Analyze the classroom board image carefully.
 
@@ -52,9 +53,22 @@ def load_model():
 # Inference                                                                    #
 # --------------------------------------------------------------------------- #
 
-def generate_notes(image: Image.Image) -> str:
+def prepare_image_for_inference(image: Image.Image, max_side: int) -> Image.Image:
+    width, height = image.size
+    largest_side = max(width, height)
+    if largest_side <= max_side:
+        return image
+
+    scale = max_side / float(largest_side)
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    return image.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def generate_notes(image: Image.Image, quick_test_mode: bool) -> str:
     if image is None:
         return "Please upload a board image first."
+
+    image = prepare_image_for_inference(image, TEST_MAX_IMAGE_SIDE)
 
     try:
         model, processor = load_model()
@@ -84,8 +98,10 @@ def generate_notes(image: Image.Image) -> str:
         return_tensors="pt",
     ).to(model.device)
 
+    max_new_tokens = 220 if quick_test_mode else 800
+
     with torch.inference_mode():
-        output_ids = model.generate(**inputs, max_new_tokens=800)
+        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
 
     # Return only newly generated tokens (strip the prompt)
     input_len = inputs["input_ids"].shape[1]
@@ -113,6 +129,10 @@ with gr.Blocks(title="ClassNotes AI", theme=gr.themes.Soft()) as demo:
                 label="Board Image",
                 sources=["upload", "webcam", "clipboard"],
             )
+            quick_test_mode = gr.Checkbox(
+                value=True,
+                label="Quick test mode (faster, shorter output)",
+            )
             submit_btn = gr.Button("Generate Notes", variant="primary")
 
         with gr.Column(scale=1):
@@ -125,7 +145,7 @@ with gr.Blocks(title="ClassNotes AI", theme=gr.themes.Soft()) as demo:
 
     submit_btn.click(
         fn=generate_notes,
-        inputs=image_input,
+        inputs=[image_input, quick_test_mode],
         outputs=notes_output,
     )
 
