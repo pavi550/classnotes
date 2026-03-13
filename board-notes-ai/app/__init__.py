@@ -1,0 +1,1 @@
+"""Board Notes AI application package."""

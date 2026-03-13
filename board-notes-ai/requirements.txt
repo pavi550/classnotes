@@ -1,0 +1,8 @@
+torch
+transformers
+accelerate
+pillow
+fastapi
+uvicorn
+python-multipart
+bitsandbytes
