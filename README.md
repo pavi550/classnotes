@@ -1,1 +1,1 @@
-# classnotes
+# classnotes for us
